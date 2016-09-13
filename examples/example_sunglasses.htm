@@ -1,41 +1,604 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-	<meta charset="utf-8">
-	<title>Pick Your Glasses</title>
+<meta charset="utf-8">
+<title>Pick Your Glasses</title>
+
+<script src="js/jquery-3.1.0.min.js"></script>
+<script src="js/compatibility.js"></script>
+<script src="js/smoother.js"></script>
+
+<script src="../js/objectdetect.js"></script>
+<script src="../js/objectdetect.frontalface_alt.js"></script>
 	
-	<script src="js/compatibility.js"></script>
-	<script src="js/smoother.js"></script>
+<!-- https://192.168.100.6/examples/example_sunglasses.htm -->
+<script>
+window.onload = function() {
 	
-	<script src="../js/objectdetect.js"></script>
-	<script src="../js/objectdetect.frontalface_alt.js"></script>
-	
-	<script>
-	window.onload = function() {
-	
-		var smoother = new Smoother([0.9999999, 0.9999999, 0.999, 0.999], [0, 0, 0, 0]),
-			video = document.getElementById('video'),
-			glasses = document.getElementById('glasses'),
-			detector;
+var smoother = new Smoother([0.9999999, 0.9999999, 0.999, 0.999], [0, 0, 0, 0]),
+video = document.getElementById('video'),
+glasses = document.getElementById('glasses');//,
+//detector;
+
+function xLabsTimer( _selector ) {
+    // Idiom: capture the object reference so we can use private functions.
+    // Use "self" instead of "this" from this point on.
+    var self = this;
+
+    // Properties
+    self.learningRate = 0.02;
+    self.t1 = null;
+    self.t2 = null;
+    self.avg = 0.0;
+
+    // Methods
+    self.before = before;
+    self.after = after;
+
+
+    // ------------------------------------------------------------------------
+    // ------------------------------------------------------------------------
+    // Private
+    // ------------------------------------------------------------------------
+    // ------------------------------------------------------------------------
+    (function() {
+      self.selector = _selector;
+    })();
+
+    function before() {
+      self.t1 = Date.now();      
+    }
+
+    function after() {
+      self.t2 = Date.now();      
+
+      var dt = self.t2 - self.t1;
+
+      var alpha = self.learningRate;
+      var beta = 1.0 - alpha;
+      self.avg = self.avg * beta + dt * alpha;
+
+      // display
+      var fps = 1000.0 / self.avg; // e.g. 1000 / 25ms per = 40
+      var desc = "FPS: " + fps + " Per: " + self.avg;
+      $( self.selector ).html( desc );
+    }
+
+}
+
+  var xLabsSnapshot = {
+    stream : null,
+    video  : null,
+//    canvas : null,
+    detector : null,
+    cameraConstraints : null,
+    timer : null,
+
+    timerTrack : null,
+    timerPipe : null,
+
+    reconstruct : true,
+    showCrop : true,
+
+    canvas : null, // entire image at native resolution
+    canvasEyesOld : null,
+    canvasEyes : null,
+    canvasFace : null,
+    canvasWhole : null,
+    canvasReconstruction : null,
+
+    setup : function() {
+
+      xLabsSnapshot.timerTrack = new xLabsTimer( "#stats-track" );
+      xLabsSnapshot.timerPipe  = new xLabsTimer( "#stats-pipe" );
+
+      $( "#start" ).on( 'click', function() {
+        xLabsSnapshot.start();
+      } );
+      $( "#stop" ).on( 'click', function() {
+        xLabsSnapshot.stop();
+      } );
+
+      xLabsSnapshot.cameraConstraints = { 
+        audio: false, 
+        video: { 
+          width: { ideal: 1024 }, 
+          height: { ideal: 768 },
+          facingMode: "user"
+        }
+      };
+
+      window.addEventListener( 'beforeunload', function( event ) {
+        if( xLabsSnapshot.stream ) {
+          xLabsSnapshot.stream.stop();
+          xLabsSnapshot.stream = null;
+        }
+      } );
+
+//      xLabsSnapshot.tracker = new clm.tracker();
+//      xLabsSnapshot.tracker.init( pModel );
+
+//      navigator.mediaDevices.getUserMedia( xLabsSnapshot.cameraConstraints )
+    },
+
+    onFailure : function( error ) {
+        console.log( "getUserMedia() error: " + error );
+    },
+
+    onSuccess : function( mediaStream ) {
+      console.log( "getUserMedia() have stream" );
+
+      xLabsSnapshot.stream = mediaStream;
+      xLabsSnapshot.video = video;//document.createElement( 'video' );
+//      xLabsSnapshot.video.setAttribute('autoplay', 'autoplay' ); // TODO replace with explicit start?
+      xLabsSnapshot.video.src = window.URL.createObjectURL( xLabsSnapshot.stream ) || xLabsSnapshot.stream;
+
+         //xLabsSnapshot.tracker.start( xLabsSnapshot.video );
+    },
+
+    start : function() {
+      if( xLabsSnapshot.timer != null ) {
+        return;
+      }
+
+      console.log( "requesting camera" );
+      navigator.getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
+      navigator.getUserMedia( xLabsSnapshot.cameraConstraints, xLabsSnapshot.onSuccess, xLabsSnapshot.onFailure );
+      console.log( "requested camera" );
+            
+      if( xLabsSnapshot.video != null ) {
+        if( xLabsSnapshot.video.paused ) {
+          xLabsSnapshot.video.play();
+        }
+      }
+
+      xLabsSnapshot.timer = setInterval( xLabsSnapshot.onInterval, 100 );
+    },
+
+    stop : function() {
+      if( xLabsSnapshot.timer == null ) {
+        return;
+      }
+
+      if( xLabsSnapshot.video != null ) {
+        if( !xLabsSnapshot.video.paused ) {
+          xLabsSnapshot.video.pause();
+        }
+      }
+
+      clearInterval( xLabsSnapshot.timer );
+      xLabsSnapshot.timer = null;
+    },
+
+    cropAndScaleImage : function( srcCanvas, xFace, yFace, wFace, hFace, xInset, yInset1, yInset2, dstScale, dstCanvas, dstSelector, dstCanvasOld ) {
+
+        var insetX  = wFace * xInset;
+        var insetY1 = hFace * yInset1;
+        var insetY2 = hFace * yInset2;
+
+        var xCrop = xFace + insetX;
+        var yCrop = yFace + insetY1;
+        var wCrop = wFace - insetX * 2; // symmetric
+        var hCrop = hFace - insetY1 - insetY2;
+
+        var wScale = wCrop * dstScale;
+        var hScale = hCrop * dstScale;
+
+      var params = {
+        x : xCrop,
+        y : yCrop,
+        w : wCrop,
+        h : hCrop,
+        w2 : wScale,
+        h2 : hScale,
+        s : dstScale
+      };
+
+      if( !xLabsSnapshot.showCrop ) {
+        dstSelector = null;
+      }
+
+      xLabsSnapshot.extractImage( srcCanvas, xCrop, yCrop, wCrop, hCrop, wScale, hScale, dstCanvas, dstSelector, dstCanvasOld );
+
+      return params;
+    },
+
+    extractImage : function( canvasSrc, x, y, w0, h0, w, h, dstCanvas, dstSelector, dstCanvasOld ) {
+      dstCanvas.width  = w;
+      dstCanvas.height = h;
+
+      var ctx = dstCanvas.getContext("2d");
+      ctx.rect( 0, 0, w, h );
+      ctx.fillStyle = 'blue';
+      ctx.fill();
+
+      var xSrc = x;
+      var ySrc = y;
+      var wSrc = w0;
+      var hSrc = h0;
+
+      var xDst = 0; // insert at origin
+      var yDst = 0; // insert at origin
+      var wDst = w;
+      var hDst = h;
+   
+      ctx.drawImage( canvasSrc, xSrc, ySrc, wSrc, hSrc, xDst, yDst, wDst, hDst );
+
+      // put canvas onto screen
+var colourSize = 0;
+      if( dstSelector ) {
+        // https://developer.mozilla.org/en-US/docs/Web/API/HTMLCanvasElement/toDataURL
+//        var dataUrl = dstCanvas.toDataURL( "image/png" );
+        var dataUrl = dstCanvas.toDataURL( "image/jpeg", 0.85 );
+//        console.log( "Len. " + dataUrl.length );
+colourSize = dataUrl.length;
+        $( dstSelector ).attr( 'src', dataUrl );
+      }
+
+///////////////////////////////////////////////
+// See if grey jpegs are smaller
+// Answer: yes, about 10%
+///////////////////////////////////////////////
+//if( !xLabsSnapshot.canvasTemp ) {
+/*  xLabsSnapshot.canvasTemp = document.createElement( "canvas" );
+//}
+xLabsSnapshot.canvasTemp.width = w;
+xLabsSnapshot.canvasTemp.height = h;
+var ctxTemp = xLabsSnapshot.canvasTemp.getContext('2d');
+ctxTemp.drawImage( dstCanvas, 0,0 );
+var imageData = ctxTemp.getImageData( 0, 0, w, h );
+var data = imageData.data;
+
+for( var i = 0; i < data.length; i += 4 ) {
+          var brightness = 0.34 * data[i] + 0.5 * data[i + 1] + 0.16 * data[i + 2];
+          // tried all same and only green, had no difference.
+          data[i    ] = 0; // red
+          data[i + 1] = brightness; // green
+          data[i + 2] = 0; // blue
+}
+
+// overwrite original image
+ctxTemp.putImageData( imageData, 0, 0 );
+var dataUrl = xLabsSnapshot.canvasTemp.toDataURL( "image/jpeg", 0.85 );
+        console.log( "Relative: " + xLabsSnapshot.canvasTemp.width + ","+ xLabsSnapshot.canvasTemp.height + " : " + dstCanvas.width + "," +dstCanvas.height +" --> " + (dataUrl.length * 1.0) / (colourSize * 1.0) );
+*/
+///////////////////////////////////////////////
+///////////////////////////////////////////////
+// See if grey jpegs are smaller
+// Answer: yes, about 10%
+///////////////////////////////////////////////
+if( dstCanvasOld == null ) {
+  return;
+}
+//if( !xLabsSnapshot.canvasTemp ) {
+  xLabsSnapshot.canvasTemp = document.createElement( "canvas" );
+//}
+xLabsSnapshot.canvasTemp.width  = w;
+xLabsSnapshot.canvasTemp.height = h;
+var ctxTemp = xLabsSnapshot.canvasTemp.getContext('2d');
+ctxTemp.drawImage( dstCanvas, 0,0 );
+var imageDataNew = ctxTemp.getImageData( 0, 0, w, h );
+var dataNew = imageDataNew.data;
+
+var ctxOld = dstCanvasOld.getContext('2d');
+var imageDataOld = ctxOld.getImageData( 0, 0, w, h );
+var dataOld = imageDataOld.data;
+
+var meanOld = 0.0;
+var meanNew = 0.0;
+
+for( var i = 0; i < dataOld.length; i += 4 ) {
+          var brightnessOld = Math.floor( 0.34 * dataOld[i] + 0.5 * dataOld[i + 1] + 0.16 * dataOld[i + 2] );
+          var brightnessNew = Math.floor( 0.34 * dataNew[i] + 0.5 * dataNew[i + 1] + 0.16 * dataNew[i + 2] );
+   meanOld = meanOld + brightnessOld;
+   meanNew = meanNew + brightnessNew;
+}
+
+meanOld = meanOld / dataOld.length;
+meanNew = meanNew / dataNew.length;
+
+var delta = meanNew - meanOld;
+console.log( "delta: " + delta );
+for( var i = 0; i < dataOld.length; i += 4 ) {
+          var brightnessOld =  0.34 * dataOld[i] + 0.5 * dataOld[i + 1] + 0.16 * dataOld[i + 2] ;
+          var brightnessNew =  0.34 * dataNew[i] + 0.5 * dataNew[i + 1] + 0.16 * dataNew[i + 2] ;
+
+brightnessNew = brightnessNew - delta;
+
+          var dR = Math.floor( Math.max( 0, brightnessOld - brightnessNew ) );
+          var dG = Math.floor( Math.max( 0, brightnessNew - brightnessOld ) );
+
+          dataNew[i    ] = dR; // red
+          dataNew[i + 1] = dG;
+          dataNew[i + 2] = 0; // blue
+}
+
+// overwrite original image
+ctxTemp.putImageData( imageDataNew, 0, 0 );
+var dataUrl = xLabsSnapshot.canvasTemp.toDataURL( "image/jpeg", 0.85 );
+
+var shrink = (dataUrl.length * 1.0) / (colourSize * 1.0);
+if( !xLabsSnapshot.shrinkAvg ) xLabsSnapshot.shrinkAvg = 0.0;
+xLabsSnapshot.shrinkAvg = shrink * 0.02 + 0.98 * xLabsSnapshot.shrinkAvg;
+        console.log( "Relative: " + xLabsSnapshot.canvasTemp.width + ","+ xLabsSnapshot.canvasTemp.height + " : " + dstCanvas.width + "," +dstCanvas.height +" --> " + xLabsSnapshot.shrinkAvg + " len: " + dataUrl.length );
+        $( dstSelector ).attr( 'src', dataUrl );
+// about 3100 bytes * 1.33 * 1.5 = 6k per frame
+// 20 frames / sec = 123k/sec
+// 60 sec per min = 7,421,400 b
+// * 5 minutes = 37,107,000
+// 
+// without tricks:
+//  *. 1.3 = 48 MB
+// full size 640x480:
+// Looking at 'adam' sample as JPEG that size,
+// 49k original size. 
+// base64 = 63.7
+// * 20  = 1274k/sec
+// * 60 = 76440k/min
+// * 5 = 382,200,000 bytes 
+///////////////////////////////////////////////
+
+    },
+
+    onInterval : function() {
+//      console.log( "snap" );
+//      play();
+      var imageReady = false;
+      if( xLabsSnapshot.video.readyState === xLabsSnapshot.video.HAVE_ENOUGH_DATA && xLabsSnapshot.video.videoWidth > 0 ) {
+        imageReady = true;
+      }
+
+      if( !imageReady ) {
+        return;
+      }
+
+      // Create a full quality source canvas for extracting crops.
+      xLabsSnapshot.timerPipe.before();
+
+      if( xLabsSnapshot.canvas == null ) {
+          xLabsSnapshot.canvas = document.createElement( "canvas" );
+      }
+
+      xLabsSnapshot.canvas.width  = xLabsSnapshot.video.videoWidth;
+      xLabsSnapshot.canvas.height = xLabsSnapshot.video.videoHeight;
+
+      var ctx = xLabsSnapshot.canvas.getContext( '2d' );
+      ctx.drawImage( xLabsSnapshot.video, 0, 0, xLabsSnapshot.video.videoWidth, xLabsSnapshot.video.videoHeight );
+
+      // lazy init detector once the video dimensions are known:
+      if( !xLabsSnapshot.detector ) {
+        var width = ~~(60 * xLabsSnapshot.video.videoWidth / xLabsSnapshot.video.videoHeight ); // reacts to video proportions?
+        var height = 60;
+        xLabsSnapshot.detector = new objectdetect.detector( width, height, 1.1, objectdetect.frontalface_alt );
+      }
+          		
+      // Perform the actual detection:
+      // NB: Fork the video so the data I extract is the same frame as the frame the detector processes. Note substitution of the video source.
+      xLabsSnapshot.timerTrack.before();
+//      var coords = xLabsSnapshot.detector.detect( xLabsSnapshot.video, 1 );
+      var coords = xLabsSnapshot.detector.detect( xLabsSnapshot.canvas, 1 );
+      xLabsSnapshot.timerTrack.after();
+
+      if( coords[0] ) { // valid face ?
+        //console.log( "has face" );
+
+        var frame = {
+          t : Date.now()
+        };
+
+        var scaleX = xLabsSnapshot.video.videoWidth  / xLabsSnapshot.detector.canvas.width;
+//        var scaleY = xLabsSnapshot.video.videoHeight / xLabsSnapshot.detector.canvas.height;
+//        console.log( "has face scale x: " + scaleX + " y: " + scaleY );
+        var coord = coords[0];
+
+        coord = smoother.smooth( coord );
+
+        var xFace = coord[0] * scaleX;
+        var yFace = coord[1] * scaleX;
+        var wFace = coord[2] * scaleX;
+        var hFace = coord[3] * scaleX;
+
+        frame.detector = {
+          scale : scaleX,
+          xFace : xFace,
+          yFace : yFace,
+          wFace : wFace,
+          hFace : hFace
+        };
+
+        // http://html5doctor.com/video-canvas-magic/  -- fork video into image
+//        var imageData = xLabsSnapshot.detector.canvas.getImageData( x, y, w, h );
+
+        // Add biases to target what we're interested in.
+        var eyesInsetX  = 0.1;
+        var eyesInsetY1 = 0.2;
+        var eyesInsetY2 = 0.5;
+        var eyesScale   = 1.0;
+
+        if( xLabsSnapshot.canvasEyes == null ) xLabsSnapshot.canvasEyes = document.createElement( "canvas" );
+//        frame.eyes = xLabsSnapshot.cropAndScaleImage( xLabsSnapshot.canvas, xFace, yFace, wFace, hFace, eyesInsetX, eyesInsetY1, eyesInsetY2, eyesScale, xLabsSnapshot.canvasEyes, "#eyes", xLabsSnapshot.canvasEyesOld );
+// fix the size of the eyes area: 
+var wFaceFix = 200;
+var hFaceFix = 250;
+        frame.eyes = xLabsSnapshot.cropAndScaleImage( xLabsSnapshot.canvas, xFace, yFace, wFace, hFace, eyesInsetX, eyesInsetY1, eyesInsetY2, eyesScale, xLabsSnapshot.canvasEyes, "#eyes", xLabsSnapshot.canvasEyesOld );
+
+        // make this a backup copy
+        if( xLabsSnapshot.canvasEyesOld == null ) xLabsSnapshot.canvasEyesOld = document.createElement( "canvas" );
+        xLabsSnapshot.canvasEyesOld.width  = xLabsSnapshot.canvasEyes.width ;
+        xLabsSnapshot.canvasEyesOld.height = xLabsSnapshot.canvasEyes.height;
+        var ctxOld = xLabsSnapshot.canvasEyesOld.getContext('2d');
+        ctxOld.drawImage( xLabsSnapshot.canvasEyes, 0,0 );
+                         
+
+/*        var eyesInsetX = wFace * 0.1;
+        var eyesInsetY1 = hFace * 0.2;
+        var eyesInsetY2 = hFace * 0.5;
+
+        var xEyes = xFace + eyesInsetX;
+        var yEyes = yFace + eyesInsetY1;
+        var wEyes = wFace - eyesInsetX - eyesInsetX; // symmetric
+        var hEyes = hFace - eyesInsetY1 - eyesInsetY2;
+
+        xLabsSnapshot.extractImage( xLabsSnapshot.canvas, xEyes, yEyes, wEyes, hEyes, wEyes, hEyes, xLabsSnapshot.canvasEyes, "#eyes" );*/
+
+        var faceInsetX  = 0.0;
+        var faceInsetY1 = 0.1;
+        var faceInsetY2 = -0.15;
+        var faceScale   = 0.25;
+
+        if( xLabsSnapshot.canvasFace == null ) xLabsSnapshot.canvasFace = document.createElement( "canvas" );
+        frame.face = xLabsSnapshot.cropAndScaleImage( xLabsSnapshot.canvas, xFace, yFace, wFace, hFace, faceInsetX, faceInsetY1, faceInsetY2, faceScale, xLabsSnapshot.canvasFace, "#face" );
+
+/*        var faceInsetX  = wFace * 0.0;
+        var faceInsetY1 = hFace * 0.1;
+        var faceInsetY2 = hFace * -0.15;
+        var faceScale = 0.25;
+
+        var xFace2 = xFace + faceInsetX;
+        var yFace2 = yFace + faceInsetY1;
+        var wFace2 = wFace - faceInsetX - faceInsetX; // symmetric
+        var hFace2 = hFace - faceInsetY1 - faceInsetY2;
+
+        var wFace2Scale = wFace * faceScale;
+        var hFace2Scale = hFace * faceScale;
+        
+        xLabsSnapshot.extractImage( xLabsSnapshot.canvas, xFace2, yFace2, wFace2, hFace2, wFace2Scale, hFace2Scale, xLabsSnapshot.canvasFace, "#face" );*/
+
+        var wholeInsetX  = 0.0;
+        var wholeInsetY1 = 0.0;
+        var wholeInsetY2 = 0.0;
+        var wholeScale   = 0.1;
+
+        var wVideo = xLabsSnapshot.video.videoWidth;
+        var hVideo = xLabsSnapshot.video.videoHeight;
+/*        var xWhole = xFace + wholeInsetX;
+        var yWhole = yFace + wholeInsetY1;
+        var wWhole = wFace - wholeInsetX - wholeInsetX; // symmetric
+        var hWhole = hFace - wholeInsetY1 - wholeInsetY2;
+
+        var wWholeScale = wWhole * wholeScale;
+        var hWholeScale = hWhole * wholeScale;*/
+
+        if( xLabsSnapshot.canvasWhole == null ) xLabsSnapshot.canvasWhole = document.createElement( "canvas" );
+        frame.whole = xLabsSnapshot.cropAndScaleImage( xLabsSnapshot.canvas, 0, 0, wVideo, hVideo, wholeInsetX, wholeInsetY1, wholeInsetY2, wholeScale, xLabsSnapshot.canvasWhole, "#whole" );
+
+        // NB 'toDataUrl' includes serialization http://stackoverflow.com/questions/6150289/how-to-convert-image-into-base64-string-using-javascript
+        // TODO async serialization https://davidwalsh.name/convert-image-data-uri-javascript
+        // http://stackoverflow.com/questions/36383994/live-streaming-axis-ip-camera-mjpeg-to-webpage-using-node-js-and-socket-io
+        // Then socketIO to send one frame at a time.
+
+        // back of the envelope size calcs:
+        // eyes = 22.7kb
+        // * 1.5 = 34kb
+        // * 20 = 681 kb/second
+        // * 60 = 40,860kb per minute. or 40mb/minute
+        // * 10 = 400 MB per 10 minute session.
+
+        // http://stackoverflow.com/questions/3979429/video-encoding-for-websites
+
+        $( "#frame" ).html( JSON.stringify( frame ) );
+
+        xLabsSnapshot.timerPipe.after();
+ 
+        // reconstruct:
+        if( xLabsSnapshot.reconstruct ) {
+          if( xLabsSnapshot.canvasReconstruction == null ) xLabsSnapshot.canvasReconstruction = document.createElement( "canvas" );
+
+          xLabsSnapshot.canvasReconstruction.width  = xLabsSnapshot.video.videoWidth;
+          xLabsSnapshot.canvasReconstruction.height = xLabsSnapshot.video.videoHeight;
+
+          var ctx = xLabsSnapshot.canvasReconstruction.getContext("2d");
+          ctx.rect( 0, 0, xLabsSnapshot.canvasReconstruction.width, xLabsSnapshot.canvasReconstruction.height );
+          ctx.fillStyle = 'blue';
+          ctx.fill();
+
+          ctx.drawImage( xLabsSnapshot.canvasWhole, 0, 0, xLabsSnapshot.video.videoWidth, xLabsSnapshot.video.videoHeight );
+          ctx.drawImage( xLabsSnapshot.canvasFace, 0,0, frame.face.w2, frame.face.h2, frame.face.x, frame.face.y, frame.face.w, frame.face.h );
+          ctx.drawImage( xLabsSnapshot.canvasEyes, 0,0, frame.eyes.w2, frame.eyes.h2, frame.eyes.x, frame.eyes.y, frame.eyes.w, frame.eyes.h );
+
+          var dataUrl = xLabsSnapshot.canvasReconstruction.toDataURL( "image/png" );
+          $( "#reconstruction" ).attr( 'src', dataUrl );
+        }
+         
+//        var xCrop = 
+/*
+        xLabsSnapshot.canvasEyes.width = 100 * scaleX;
+        xLabsSnapshot.canvasEyes.height = 100;
+
+        var ctx = xLabsSnapshot.canvasEyes.getContext("2d");
+        ctx.rect( 0, 0, 100, 100);
+        ctx.fillStyle = 'blue';
+        ctx.fill();
+        ctx.drawImage( imgSrc, xSrc, ySrc, wSrc, hSrc, xDst, yDst, wDst, hDst );
+//        ctx.putImageData( imageData, 0, 0 );
+
+        // put canvas onto screen
+        var dataUrl = xLabsSnapshot.canvasEyes.toDataURL( "image/png" );
+        $( "#eyes" ).attr( 'src', dataUrl );*/
+        
+        var coord = coords[0];
+        coord = smoother.smooth( coord );
+					
+        // Rescale coordinates from detector to video coordinate space:
+	coord[0] *= xLabsSnapshot.video.videoWidth  / xLabsSnapshot.detector.canvas.width;
+	coord[1] *= xLabsSnapshot.video.videoHeight / xLabsSnapshot.detector.canvas.height;
+	coord[2] *= xLabsSnapshot.video.videoWidth  / xLabsSnapshot.detector.canvas.width;
+	coord[3] *= xLabsSnapshot.video.videoHeight / xLabsSnapshot.detector.canvas.height;
+					
+	// Display glasses overlay: 
+	glasses.style.left    = ~~(coord[0] + coord[2] * 1.0/8 + xLabsSnapshot.video.offsetLeft ) + 'px';
+	glasses.style.top     = ~~(coord[1] + coord[3] * 0.8/8 + xLabsSnapshot.video.offsetTop ) + 'px';
+	glasses.style.width   = ~~(coord[2] * 6/8) + 'px';
+	glasses.style.height  = ~~(coord[3] * 6/8) + 'px';
+	glasses.style.opacity = 1;
+      } 
+      else {
+        console.log( "no face" );
+        var opacity = glasses.style.opacity - 0.2;
+        glasses.style.opacity = opacity > 0 ? opacity : 0;
+      } // coords?
+    }
+
+  };
+
+  xLabsSnapshot.setup();
+
+  [].slice.call( document.getElementById('list').children ).forEach( function(e) {
+    e.addEventListener( 'click', function() {
+      glasses.src = e.src;
+    }, false  );
+  } );
+
+}; // window.onload
+
+
 				
-		try {
+/*		try {
 			compatibility.getUserMedia({video: true}, function(stream) {
+console.log( " got stream" );
 				try {
 					video.src = compatibility.URL.createObjectURL(stream);
+console.log( " object URL stream" );
 				} catch (error) {
+console.log( " simple stream" );
 					video.src = stream;
 				}
+console.log( " request anim frame" );
 				compatibility.requestAnimationFrame(play);
 			}, function (error) {
-				alert('WebRTC not available');
+console.log( " no camera API" );
+//				alert('WebRTC not available');
 			});
 		} catch (error) {
-			alert(error);
+//			alert(error);
+console.log( " general API error" );
+
 		}
-		
-		function play() {
-			compatibility.requestAnimationFrame(play);
-			if (video.paused) video.play();
+*/		
+/*		function play() {
+console.log( "play" );
+//			compatibility.requestAnimationFrame(play);
+//			if (video.paused) video.play();
           	
 			if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
 	          	
@@ -47,10 +610,12 @@
 		      	}
           		
           		// Perform the actual detection:
+                        xLabsSnapshot.beforeTrack();
 				var coords = detector.detect(video, 1);
-				if (coords[0]) {
-					var coord = coords[0];
-					coord = smoother.smooth(coord);
+                        xLabsSnapshot.afterTrack();
+			if( coords[0] ) {
+				var coord = coords[0];
+				coord = smoother.smooth(coord);
 					
 					// Rescale coordinates from detector to video coordinate space:
 					coord[0] *= video.videoWidth / detector.canvas.width;
@@ -68,34 +633,65 @@
 				} else {
 					var opacity = glasses.style.opacity - 0.2;
 					glasses.style.opacity = opacity > 0 ? opacity : 0;
-				}
-			}
-		}
+				} // coords
+			} // video not ready
+		} // play
 		
 		[].slice.call(document.getElementById('list').children).forEach(function(e) {
 			e.addEventListener('click', function() {
 				glasses.src = e.src;
 			}, false);
-		});
-	};
+		}); // slice
+	}; // window.onload 
+*/
 	
     </script>
 </head>
 
 <body>
+<div>
 	<h1>Pick Your Glasses</h1>
-	<video id="video" style="float: left; margin-right: 1em;"></video>
-	<div id="list">
-		<img src="img/sunglasses_0.png" style="width: 117px;">
-		<img src="img/sunglasses_1.png" style="width: 117px;">
-		<img src="img/sunglasses_2.png" style="width: 117px;">
-		<img src="img/sunglasses_3.png" style="width: 117px;">
-		<img src="img/sunglasses_4.png" style="width: 117px;">
-		<img src="img/sunglasses_5.png" style="width: 117px;">
-		<img src="img/sunglasses_6.png" style="width: 117px;">
-		<img src="img/sunglasses_7.png" style="width: 117px;">
-	</div>
+        <button type="button" id="start">Start</button>
+        <button type="button" id="stop">Stop</button>
+	<h3>Pipe: <span id="stats-pipe">?</span></h3>
+	<h3>Track: <span id="stats-track">?</span></h3>
+</div> 
+
+<video id="video" style="float: left; margin-right: 1em;"></video>
+
+<div id="list">
+<img src="img/sunglasses_0.png" style="width: 117px;">
+<img src="img/sunglasses_1.png" style="width: 117px;">
+<img src="img/sunglasses_2.png" style="width: 117px;">
+<img src="img/sunglasses_3.png" style="width: 117px;">
+<img src="img/sunglasses_4.png" style="width: 117px;">
+<img src="img/sunglasses_5.png" style="width: 117px;">
+<img src="img/sunglasses_6.png" style="width: 117px;">
+<img src="img/sunglasses_7.png" style="width: 117px;">
+</div>
 	
-	<img id="glasses" src="img/sunglasses_0.png" style="position: absolute; display: block; opacity: 0">
+<img id="glasses" src="img/sunglasses_0.png" style="position: absolute; display: block; opacity: 0">
+
+<div>
+ <img id="eyes" src="#" style="">
+</div> 
+<div>
+ <img id="eyes-old" src="#" style="">
+</div> 
+<div>
+ <img id="face" src="#" style="">
+</div> 
+<div>
+ <img id="whole" src="#" style="">
+</div> 
+<div>
+ <p id="frame"></p>
+</div> 
+
+<div>
+ <img id="reconstruction" src="#" style="">
+</div> 
+
+
 </body>
 </html>

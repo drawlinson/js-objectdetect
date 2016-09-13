@@ -9,8 +9,10 @@ var compatibility = (function() {
 		URL = window.URL || window.webkitURL,
 	
 		requestAnimationFrame = function(callback, element) {
-			var requestAnimationFrame =
-				window.requestAnimationFrame		|| 
+/*			var requestAnimationFrame =
+				window.requestAnimationFrame;
+
+/*		|| 
 				window.webkitRequestAnimationFrame	|| 
 				window.mozRequestAnimationFrame		|| 
 				window.oRequestAnimationFrame		||
@@ -23,12 +25,26 @@ var compatibility = (function() {
 		            lastTime = currTime + timeToCall;
 		            return id;
 		        };
-	
-			return requestAnimationFrame.call(window, callback, element);
+	*/
+//			return requestAnimationFrame.call(window, callback, element);
+window.requestAnimationFrame( callback, element);
 		},
 		
 		getUserMedia = function(options, success, error) {
-			var getUserMedia =
+
+navigator.getUserMedia = (navigator.getUserMedia ||
+                            navigator.webkitGetUserMedia ||
+                            navigator.mozGetUserMedia || 
+                            navigator.msGetUserMedia);
+			return getUserMedia.call(window.navigator, options, success, error);
+
+//			var getUserMedia = navigator.mediaDevices.getUserMedia;
+//			return getUserMedia.call( options, success, error );
+			//var getUserMedia = navigator.mediaDevices.getUserMedia( options, success, error );;
+			//return getUserMedia.call( options, success, error );
+//                        return navigator.mediaDevices.getUserMedia( options, success, error );
+
+/*				navigator.mediaDevices.getUserMedia ||
 				window.navigator.getUserMedia ||
 				window.navigator.mozGetUserMedia ||
 				window.navigator.webkitGetUserMedia ||
@@ -36,7 +52,7 @@ var compatibility = (function() {
 					error();
 				};
 			
-			return getUserMedia.call(window.navigator, options, success, error);
+			return getUserMedia.call(window.navigator, options, success, error);*/
 		};
 
 	return {
